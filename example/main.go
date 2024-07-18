@@ -26,6 +26,8 @@ func main() {
 
 	root := aimd.NewLimiter(rate, 0, 1)
 
+	fmt.Println("X,ID,Y")
+
 	for i := 0; i < workers; i++ {
 		limiter := aimd.NewLimiter(1, 1, 2)
 
