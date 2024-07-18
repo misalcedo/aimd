@@ -6,3 +6,8 @@ The congestion window size is then increased by 1 MSS every RTT until another pa
 This process is repeated until the congestion window size reaches the maximum value.
 
 See https://en.wikipedia.org/wiki/Additive_increase/multiplicative_decrease
+
+## Acknowledgement
+This code is based a fork of [golang.org/x/sync/semaphore#Weighted](https://pkg.go.dev/golang.org/x/sync@v0.7.0/semaphore#Weighted).
+All code from the original implementation maintains its original license.
+The semaphore implementation is extended to support AIMD.

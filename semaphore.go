@@ -26,6 +26,8 @@ type waiter struct {
 // NewLimiter creates a new weighted semaphore with the given
 // maximum combined weight for concurrent access.
 // Unlike [golang.org/x/sync/semaphore], this semaphore supports a dynamic maximum weight.
+// On [Limiter.ReleaseSuccess], the maximum combined weight is increased by adding increase.
+// On [Limiter.ReleaseFailure], the maximum combined weight is decreased by dividing by decrease and dropping the remainder.
 func NewLimiter(n int, increase int, decrease int) *Limiter {
 	return &Limiter{size: n, increase: increase, decrease: decrease}
 }
