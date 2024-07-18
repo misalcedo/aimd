@@ -14,7 +14,7 @@ func main() {
 	var wg sync.WaitGroup
 	var concurrency, iterations, rate, workers int
 
-	flag.IntVar(&iterations, "iterations", 1_000_000, "number of iterations")
+	flag.IntVar(&iterations, "iterations", 1_000, "number of iterations")
 	flag.IntVar(&rate, "rate", 100, "rate of the underlying resource")
 	flag.IntVar(&workers, "workers", 10, "number of workers")
 	flag.IntVar(&concurrency, "concurrency", 1_000, "concurrency of a worker")
@@ -34,7 +34,7 @@ func main() {
 			defer ticker.Stop()
 
 			for range ticker.C {
-				fmt.Printf("%d,%d\n", id, limiter.Size())
+				fmt.Printf("%s,%d,%d\n", time.Now().Format(time.DateTime), id, limiter.Size())
 			}
 		}(i)
 
