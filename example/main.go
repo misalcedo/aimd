@@ -24,13 +24,13 @@ func main() {
 		log.Fatalln("rate must be less than the workers multiplied by their concurrency")
 	}
 
-	root := aimd.NewLimiter(rate, 0, 1)
+	root := aimd.NewLimiter(rate, 0, 1, time.Hour)
 
 	start := time.Now()
 	metrics := make(chan [4]int, workers*concurrency*iterations)
 
 	for i := 0; i < workers; i++ {
-		limiter := aimd.NewLimiter(1, 1, 2)
+		limiter := aimd.NewLimiter(1, 1, 2, 200*time.Nanosecond)
 
 		for j := 0; j < concurrency; j++ {
 			wg.Add(1)
@@ -43,7 +43,7 @@ func main() {
 					metrics <- [4]int{int(time.Since(start).Nanoseconds()), id, 1, root.Acquired()}
 
 					if root.TryAcquire(1) {
-						limiter.ReleaseSuccess(1)
+						limiter.Release(1)
 						root.Release(1)
 					} else {
 						limiter.ReleaseFailure(1)
@@ -59,6 +59,6 @@ func main() {
 
 	fmt.Println("X,ID,Client,Server")
 	for entry := range metrics {
-		fmt.Printf("%d,%d,%d,%d\n", entry[0]%10_000, entry[1], entry[2], entry[3])
+		fmt.Printf("%d,%d,%d,%d\n", entry[0]/15_000, entry[1], entry[2], entry[3])
 	}
 }

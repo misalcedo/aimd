@@ -30,6 +30,15 @@ The values don't perfectly match the server's utilization due to the grouping us
 The following chart shows the server's utilization.
 ![Chart of server utilization](example/server.png)
 
+### Run 2
+The following chart shows the maximum concurrency limit of each worker (i.e. client).
+The simulation was run with 10 workers each with a concurrency of 100 each for 100 iterations per concurrent operation.
+The underlying resource has a concurrency of 100.
+The limiter's were incremented only when they were not denied access by the server in RTT window.
+
+The following chart shows the server's utilization.
+![Chart of server utilization](example/server-linear.png)
+
 ## Acknowledgement
 This code is based a fork of [golang.org/x/sync/semaphore#Weighted](https://pkg.go.dev/golang.org/x/sync@v0.7.0/semaphore#Weighted).
 All code from the original implementation maintains its original license.

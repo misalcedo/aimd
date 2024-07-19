@@ -5,6 +5,7 @@ import (
 	"container/list"
 	"context"
 	"sync"
+	"time"
 )
 
 // Limiter provides a way to bound concurrent access to a resource.
@@ -14,8 +15,11 @@ type Limiter struct {
 	acquired int
 	increase int
 	decrease int
+	failures int
+	rtt      time.Duration
 	mutex    sync.Mutex
 	waiters  list.List
+	stop     chan struct{}
 }
 
 type waiter struct {
@@ -28,8 +32,10 @@ type waiter struct {
 // Unlike [golang.org/x/sync/semaphore], this semaphore supports a dynamic maximum weight.
 // On [Limiter.ReleaseSuccess], the maximum combined weight is increased by adding increase.
 // On [Limiter.ReleaseFailure], the maximum combined weight is decreased by dividing by decrease and dropping the remainder.
-func NewLimiter(n int, increase int, decrease int) *Limiter {
-	return &Limiter{size: n, increase: increase, decrease: decrease}
+func NewLimiter(n int, increase int, decrease int, rtt time.Duration) *Limiter {
+	limiter := &Limiter{size: n, increase: increase, decrease: decrease, rtt: rtt, stop: make(chan struct{})}
+	limiter.increment()
+	return limiter
 }
 
 // Size is the maximum combined weight for concurrent access allowed by this semaphore.
@@ -47,18 +53,34 @@ func (a *Limiter) Acquired() int {
 	return a.acquired
 }
 
-// ReleaseSuccess releases the semaphore with a weight of n and increases the maximum combined weight..
-func (a *Limiter) ReleaseSuccess(n int) {
-	a.mutex.Lock()
-	if a.acquired < n {
-		a.mutex.Unlock()
-		panic("released more than held")
-	}
+// Close stops the semaphore from incrementing the maximum combined weight.
+func (a *Limiter) Close() {
+	close(a.stop)
+}
 
-	a.acquired -= n
-	a.size += a.increase
-	a.notifyWaiters()
-	a.mutex.Unlock()
+// increment increases the maximum combined weight.
+func (a *Limiter) increment() {
+	go func() {
+		ticker := time.NewTicker(a.rtt)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-a.stop:
+				return
+			case <-ticker.C:
+				a.mutex.Lock()
+
+				if a.failures == 0 {
+					a.size += a.increase
+				}
+
+				a.failures = 0
+				a.notifyWaiters()
+				a.mutex.Unlock()
+			}
+		}
+	}()
 }
 
 // ReleaseFailure releases the semaphore with a weight of n and decreases the maximum combined weight.
@@ -71,6 +93,7 @@ func (a *Limiter) ReleaseFailure(n int) {
 	}
 
 	a.acquired -= n
+	a.failures += n
 	a.size = max(1, a.size/a.decrease)
 	a.notifyWaiters()
 	a.mutex.Unlock()
