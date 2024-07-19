@@ -7,6 +7,12 @@ This process is repeated until the congestion window size reaches the maximum va
 
 See https://en.wikipedia.org/wiki/Additive_increase/multiplicative_decrease
 
+## Simulation
+The example directory contains a simulation of multiple concurrent workers along with a CSV of a run using the default parameters.
+Each worker has its own limiter and attempts to run a number of concurrent operations.
+
+![Chart of worker concurrency limits](example/chart.png)
+
 ## Acknowledgement
 This code is based a fork of [golang.org/x/sync/semaphore#Weighted](https://pkg.go.dev/golang.org/x/sync@v0.7.0/semaphore#Weighted).
 All code from the original implementation maintains its original license.
