@@ -26,19 +26,13 @@ func main() {
 
 	root := aimd.NewLimiter(rate, 0, 1)
 
-	fmt.Println("X,ID,Y")
+	fmt.Println("X,ID,Limit,Acquired")
+
+	var limiters []*aimd.Limiter
 
 	for i := 0; i < workers; i++ {
 		limiter := aimd.NewLimiter(1, 1, 2)
-
-		go func(id int) {
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-
-			for range ticker.C {
-				fmt.Printf("%s,%d,%d\n", time.Now().Format(time.DateTime), id, limiter.Size())
-			}
-		}(i)
+		limiters = append(limiters, limiter)
 
 		for j := 0; j < concurrency; j++ {
 			wg.Add(1)
@@ -58,6 +52,21 @@ func main() {
 			}(i)
 		}
 	}
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			now := time.Now().Format(time.DateTime)
+
+			fmt.Printf("%s,%d,%d,%d\n", now, 0, root.Size(), root.Acquired())
+
+			for i, limiter := range limiters {
+				fmt.Printf("%s,%d,%d,%d\n", now, i+1, limiter.Size(), limiter.Acquired())
+			}
+		}
+	}()
 
 	wg.Wait()
 }
