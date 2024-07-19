@@ -11,6 +11,10 @@ See https://en.wikipedia.org/wiki/Additive_increase/multiplicative_decrease
 The example directory contains a simulation of multiple concurrent workers along with a CSV of a run using the default parameters.
 Each worker has its own limiter and attempts to run a number of concurrent operations.
 
+The following chart shows the maximum concurrency limit of each worker on a 1 second interval.
+The simulation was run with 10 workers each with a concurrency of 1,000 each for 10,000 iterations per concurrent operation.
+The underlying resource has a concurrency of 1,000.
+
 ![Chart of worker concurrency limits](example/chart.png)
 
 ## Acknowledgement
