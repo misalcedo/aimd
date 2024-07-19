@@ -7,6 +7,9 @@ This process is repeated until the congestion window size reaches the maximum va
 
 See https://en.wikipedia.org/wiki/Additive_increase/multiplicative_decrease
 
+## Notes
+This implementation will exhibit exponential, rather than linear, growth when a client is fully utilized (e.g., 1 -> 2 -> 4 -> 8). This occurs because we increase the limit after each acquired weight is released instead of only increasing every Round-Trip Time. An alternative implementation would be to increase the limit on decaying average RTT as long as no failures were detected. This would require tracking the average RTT in the limiter and updating the limit on each acquire if the RTT time has passed.
+
 ## Simulation
 The example directory contains a simulation of multiple concurrent workers along with a CSV of a run using the default parameters.
 Each worker has its own limiter and attempts to run a number of concurrent operations.
