@@ -8,11 +8,9 @@ This process is repeated until the congestion window size reaches the maximum va
 See https://en.wikipedia.org/wiki/Additive_increase/multiplicative_decrease
 
 ## Notes
-Runs 1 and 2 exhibit exponential, rather than linear, growth when a client is fully utilized (e.g., 1 -> 2 -> 4 -> 8). This occurs because we increase the limit after each acquired weight is released instead of only increasing every Round-Trip Time.
-
-Run 3 uses a ticker to increase the limit on an interval as long as no failures were reported since the last tick.
-
-An alternative implementation would use a decaying average RTT instead of hard-coding an interval. Tracking the RTT dynamically would allow us to detect increases in the RTT time as congestion and decrease accordingly.
+The Limiter implements both slow start and congestion avoidance.
+Slow start increases the concurrency exponentially by adding maximum weight on every success.
+Congestion avoidance increases linearly by adding a fraction of the congestion window on every success. 
 
 ## Simulation
 The example directory contains a simulation of multiple concurrent workers along with a CSV of a run using the default parameters.

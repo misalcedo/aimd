@@ -4,22 +4,21 @@ package aimd
 import (
 	"container/list"
 	"context"
+	"math"
 	"sync"
-	"time"
 )
 
 // Limiter provides a way to bound concurrent access to a resource.
 // The callers can request access with a given weight.
 type Limiter struct {
-	size     int
-	acquired int
-	increase int
-	decrease int
-	failures int
-	rtt      time.Duration
-	mutex    sync.Mutex
-	waiters  list.List
-	stop     chan struct{}
+	limit              int
+	acquired           int
+	congestionWindow   float64
+	slowStartThreshold float64
+	maximumWeight      float64
+	mutex              sync.Mutex
+	waiters            list.List
+	stop               chan struct{}
 }
 
 type waiter struct {
@@ -30,57 +29,25 @@ type waiter struct {
 // NewLimiter creates a new weighted semaphore with the given
 // maximum combined weight for concurrent access.
 // Unlike [golang.org/x/sync/semaphore], this semaphore supports a dynamic maximum weight.
-// On [Limiter.ReleaseSuccess], the maximum combined weight is increased by adding increase.
-// On [Limiter.ReleaseFailure], the maximum combined weight is decreased by dividing by decrease and dropping the remainder.
-func NewLimiter(n int, increase int, decrease int, rtt time.Duration) *Limiter {
-	limiter := &Limiter{size: n, increase: increase, decrease: decrease, rtt: rtt, stop: make(chan struct{})}
-	limiter.increment()
-	return limiter
+// On [Limiter.ReleaseSuccess], the maximum combined weight is increased linearly.
+// On [Limiter.ReleaseFailure], the maximum combined weight is decreased exponentially.
+func NewLimiter(slowStartThreshold int, maximumWeight int) *Limiter {
+	return &Limiter{limit: 1, congestionWindow: 1.0, slowStartThreshold: float64(slowStartThreshold), maximumWeight: float64(maximumWeight)}
 }
 
-// Size is the maximum combined weight for concurrent access allowed by this semaphore.
-func (a *Limiter) Size() int {
+// Limit is the maximum combined weight for concurrent access allowed by this semaphore.
+func (a *Limiter) Limit() int {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
-	return a.size
+	return a.limit
 }
 
 // Acquired is the current combined weight for concurrent access in use by this semaphore.
-// The semaphore may be over-subscribed ([Limiter.Size] > [Limiter.Acquired]) when the limit is reduced.
+// The semaphore may be over-subscribed ([Limiter.Limit] > [Limiter.Acquired]) when the limit is reduced.
 func (a *Limiter) Acquired() int {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 	return a.acquired
-}
-
-// Close stops the semaphore from incrementing the maximum combined weight.
-func (a *Limiter) Close() {
-	close(a.stop)
-}
-
-// increment increases the maximum combined weight.
-func (a *Limiter) increment() {
-	go func() {
-		ticker := time.NewTicker(a.rtt)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-a.stop:
-				return
-			case <-ticker.C:
-				a.mutex.Lock()
-
-				if a.failures == 0 {
-					a.size += a.increase
-				}
-
-				a.failures = 0
-				a.notifyWaiters()
-				a.mutex.Unlock()
-			}
-		}
-	}()
 }
 
 // ReleaseFailure releases the semaphore with a weight of n and decreases the maximum combined weight.
@@ -93,8 +60,29 @@ func (a *Limiter) ReleaseFailure(n int) {
 	}
 
 	a.acquired -= n
-	a.failures += n
-	a.size = max(1, a.size/a.decrease)
+	a.congestionWindow = max(a.congestionWindow/2, 1)
+	a.limit = int(math.Floor(a.congestionWindow))
+	a.notifyWaiters()
+	a.mutex.Unlock()
+}
+
+// ReleaseSuccess releases the semaphore with a weight of n and increases the maximum combined weight.
+func (a *Limiter) ReleaseSuccess(n int) {
+	a.mutex.Lock()
+	if a.acquired < n {
+		a.mutex.Unlock()
+		panic("semaphore: released more than held")
+	}
+
+	a.acquired -= n
+
+	if a.congestionWindow <= a.slowStartThreshold {
+		a.congestionWindow += a.maximumWeight
+	} else {
+		a.congestionWindow += (a.maximumWeight * a.maximumWeight / a.congestionWindow) + (a.maximumWeight / 8)
+	}
+
+	a.limit = int(math.Floor(a.congestionWindow))
 	a.notifyWaiters()
 	a.mutex.Unlock()
 }
@@ -116,7 +104,7 @@ func (a *Limiter) Acquire(ctx context.Context, n int) error {
 		return ctx.Err()
 	default:
 	}
-	if a.size-a.acquired >= n && a.waiters.Len() == 0 {
+	if a.limit-a.acquired >= n && a.waiters.Len() == 0 {
 		// Since we hold a.mutex and haven't synchronized since checking done, if
 		// ctx becomes done before we return here, it becoming done must have
 		// "happened concurrently" with this call - it cannot "happen before"
@@ -126,7 +114,7 @@ func (a *Limiter) Acquire(ctx context.Context, n int) error {
 		return nil
 	}
 
-	if n > a.size {
+	if n > a.limit {
 		// Don't make other Acquire calls block on one that's doomed to fail.
 		a.mutex.Unlock()
 		<-done
@@ -151,7 +139,7 @@ func (a *Limiter) Acquire(ctx context.Context, n int) error {
 			isFront := a.waiters.Front() == elem
 			a.waiters.Remove(elem)
 			// If we're at the front and there're extra tokens left, notify other waiters.
-			if isFront && a.size > a.acquired {
+			if isFront && a.limit > a.acquired {
 				a.notifyWaiters()
 			}
 		}
@@ -177,7 +165,7 @@ func (a *Limiter) Acquire(ctx context.Context, n int) error {
 // On success, returns true. On failure, returns false and leaves the semaphore unchanged.
 func (a *Limiter) TryAcquire(n int) bool {
 	a.mutex.Lock()
-	success := a.size-a.acquired >= n && a.waiters.Len() == 0
+	success := a.limit-a.acquired >= n && a.waiters.Len() == 0
 	if success {
 		a.acquired += n
 	}
@@ -205,7 +193,7 @@ func (a *Limiter) notifyWaiters() {
 		}
 
 		w := next.Value.(waiter)
-		if a.size-a.acquired < w.n {
+		if a.limit-a.acquired < w.n {
 			// Not enough tokens for the next waiter.  We could keep going (to try to
 			// find a waiter with a smaller request), but under load that could cause
 			// starvation for large requests; instead, we leave all remaining waiters
