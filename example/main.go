@@ -13,11 +13,14 @@ import (
 func main() {
 	var wg sync.WaitGroup
 	var concurrency, iterations, rate, workers int
+	var errorDuration, successDuration time.Duration
 
 	flag.IntVar(&iterations, "iterations", 100, "number of iterations")
 	flag.IntVar(&rate, "rate", 100, "rate of the underlying resource")
 	flag.IntVar(&workers, "workers", 10, "number of workers")
 	flag.IntVar(&concurrency, "concurrency", 100, "concurrency of a worker")
+	flag.DurationVar(&successDuration, "successDuration", 100*time.Second, "duration of success")
+	flag.DurationVar(&errorDuration, "errorDuration", time.Second*1, "duration of error")
 	flag.Parse()
 
 	if rate >= workers*concurrency {
@@ -43,9 +46,11 @@ func main() {
 					metrics <- [4]int{int(time.Since(start).Nanoseconds()), id, 1, root.Acquired()}
 
 					if root.TryAcquire(1) {
+						time.Sleep(successDuration)
 						limiter.ReleaseSuccess(1)
 						root.Release(1)
 					} else {
+						time.Sleep(errorDuration)
 						limiter.ReleaseFailure(1)
 					}
 				}
