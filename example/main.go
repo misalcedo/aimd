@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	var wg sync.WaitGroup
+	var producers sync.WaitGroup
 	var concurrency, iterations, rate, workers int
 	var errorDuration, successDuration time.Duration
 
@@ -36,9 +36,9 @@ func main() {
 		limiter := aimd.NewLimiter(1, 1)
 
 		for j := 0; j < concurrency; j++ {
-			wg.Add(1)
+			producers.Add(1)
 			go func(id int) {
-				defer wg.Done()
+				defer producers.Done()
 
 				for k := 0; k < iterations; k++ {
 					_ = limiter.Acquire(context.Background(), 1)
@@ -58,12 +58,17 @@ func main() {
 		}
 	}
 
-	wg.Wait()
+	var printer sync.WaitGroup
+	printer.Add(1)
+	go func() {
+		defer printer.Done()
+		fmt.Println("X,ID,Client,Server")
+		for entry := range metrics {
+			fmt.Printf("%d,%d,%d,%d\n", entry[0]/35_000, entry[1], entry[2], entry[3])
+		}
+	}()
 
+	producers.Wait()
 	close(metrics)
-
-	fmt.Println("X,ID,Client,Server")
-	for entry := range metrics {
-		fmt.Printf("%d,%d,%d,%d\n", entry[0]/35_000, entry[1], entry[2], entry[3])
-	}
+	printer.Wait()
 }
