@@ -19,7 +19,7 @@ func main() {
 	flag.IntVar(&rate, "rate", 100, "rate of the underlying resource")
 	flag.IntVar(&workers, "workers", 10, "number of workers")
 	flag.IntVar(&concurrency, "concurrency", 100, "concurrency of a worker")
-	flag.DurationVar(&successDuration, "successDuration", 100*time.Second, "duration of success")
+	flag.DurationVar(&successDuration, "successDuration", 100*time.Millisecond, "duration of success")
 	flag.DurationVar(&errorDuration, "errorDuration", time.Second*1, "duration of error")
 	flag.Parse()
 
