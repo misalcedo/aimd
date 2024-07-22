@@ -64,7 +64,7 @@ func main() {
 		defer printer.Done()
 		fmt.Println("X,ID,Client,Server")
 		for entry := range metrics {
-			fmt.Printf("%d,%d,%d,%d\n", entry[0]/35_000, entry[1], entry[2], entry[3])
+			fmt.Printf("%d,%d,%d,%d\n", entry[0], entry[1], entry[2], entry[3])
 		}
 	}()
 
