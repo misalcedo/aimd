@@ -70,6 +70,6 @@ func TestAdditiveIncreaseMultiplicativeDecrease_Concurrent(t *testing.T) {
 		}()
 	}
 
-	require.NoError(t, limiter.Acquire(ctx, workers))
+	require.NoError(t, limiter.Acquire(ctx, int64(workers)))
 	require.Equal(t, workers, limiter.Acquired())
 }

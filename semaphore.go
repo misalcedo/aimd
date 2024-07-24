@@ -2,28 +2,16 @@
 package aimd
 
 import (
-	"container/list"
-	"context"
 	"math"
-	"sync"
 )
 
 // Limiter provides a way to bound concurrent access to a resource.
 // The callers can request access with a given weight.
 type Limiter struct {
-	limit              int
-	acquired           int
+	Weighted
 	congestionWindow   float64
 	slowStartThreshold float64
 	maximumWeight      float64
-	mutex              sync.Mutex
-	waiters            list.List
-	stop               chan struct{}
-}
-
-type waiter struct {
-	n     int
-	ready chan<- struct{} // Closed when semaphore acquired.
 }
 
 // NewLimiter creates a new weighted semaphore with the given
@@ -32,184 +20,64 @@ type waiter struct {
 // On [Limiter.ReleaseSuccess], the maximum combined weight is increased linearly.
 // On [Limiter.ReleaseFailure], the maximum combined weight is decreased exponentially.
 func NewLimiter(slowStartThreshold int, maximumWeight int) *Limiter {
-	return &Limiter{limit: 1, congestionWindow: 1.0, slowStartThreshold: float64(slowStartThreshold), maximumWeight: float64(maximumWeight)}
+	return &Limiter{
+		Weighted:           Weighted{size: 1},
+		congestionWindow:   1.0,
+		slowStartThreshold: float64(slowStartThreshold),
+		maximumWeight:      float64(maximumWeight),
+	}
 }
 
 // Limit is the maximum combined weight for concurrent access allowed by this semaphore.
 func (a *Limiter) Limit() int {
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
-	return a.limit
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return int(a.size)
 }
 
 // Acquired is the current combined weight for concurrent access in use by this semaphore.
 // The semaphore may be over-subscribed ([Limiter.Limit] > [Limiter.Acquired]) when the limit is reduced.
 func (a *Limiter) Acquired() int {
-	a.mutex.Lock()
-	defer a.mutex.Unlock()
-	return a.acquired
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return int(a.cur)
 }
 
 // ReleaseFailure releases the semaphore with a weight of n and decreases the maximum combined weight.
 // The maximum combined weight is guaranteed to be greater than 0.
 func (a *Limiter) ReleaseFailure(n int) {
-	a.mutex.Lock()
-	if a.acquired < n {
-		a.mutex.Unlock()
+	a.mu.Lock()
+	a.cur -= int64(n)
+	if a.cur < 0 {
+		a.mu.Unlock()
 		panic("semaphore: released more than held")
 	}
 
-	a.acquired -= n
-	a.congestionWindow = max(a.congestionWindow/2, 1)
-	a.limit = int(math.Floor(a.congestionWindow))
+	a.slowStartThreshold = max(a.congestionWindow/2, 1)
+	a.congestionWindow = a.slowStartThreshold
+	a.size = int64(math.Floor(a.congestionWindow))
+
 	a.notifyWaiters()
-	a.mutex.Unlock()
+	a.mu.Unlock()
 }
 
 // ReleaseSuccess releases the semaphore with a weight of n and increases the maximum combined weight.
 func (a *Limiter) ReleaseSuccess(n int) {
-	a.mutex.Lock()
-	if a.acquired < n {
-		a.mutex.Unlock()
+	a.mu.Lock()
+	a.cur -= int64(n)
+	if a.cur < 0 {
+		a.mu.Unlock()
 		panic("semaphore: released more than held")
 	}
 
-	a.acquired -= n
-
-	if a.congestionWindow <= a.slowStartThreshold {
-		a.congestionWindow += a.maximumWeight
-	} else {
+	if a.congestionWindow > a.slowStartThreshold {
 		a.congestionWindow += (a.maximumWeight * a.maximumWeight / a.congestionWindow) + (a.maximumWeight / 8)
+	} else {
+		a.congestionWindow += a.maximumWeight
 	}
 
-	a.limit = int(math.Floor(a.congestionWindow))
+	a.size = int64(math.Floor(a.congestionWindow))
+
 	a.notifyWaiters()
-	a.mutex.Unlock()
-}
-
-// Acquire acquires the semaphore with a weight of n, blocking until resources
-// are available or ctx is done. On success, returns nil. On failure, returns
-// ctx.Err() and leaves the semaphore unchanged.
-func (a *Limiter) Acquire(ctx context.Context, n int) error {
-	done := ctx.Done()
-
-	a.mutex.Lock()
-	select {
-	case <-done:
-		// ctx becoming done has "happened before" acquiring the semaphore,
-		// whether it became done before the call began or while we were
-		// waiting for the mutex. We prefer to fail even if we could acquire
-		// the mutex without blocking.
-		a.mutex.Unlock()
-		return ctx.Err()
-	default:
-	}
-	if a.limit-a.acquired >= n && a.waiters.Len() == 0 {
-		// Since we hold a.mutex and haven't synchronized since checking done, if
-		// ctx becomes done before we return here, it becoming done must have
-		// "happened concurrently" with this call - it cannot "happen before"
-		// we return in this branch. So, we're ok to always acquire here.
-		a.acquired += n
-		a.mutex.Unlock()
-		return nil
-	}
-
-	if n > a.limit {
-		// Don't make other Acquire calls block on one that's doomed to fail.
-		a.mutex.Unlock()
-		<-done
-		return ctx.Err()
-	}
-
-	ready := make(chan struct{})
-	w := waiter{n: n, ready: ready}
-	elem := a.waiters.PushBack(w)
-	a.mutex.Unlock()
-
-	select {
-	case <-done:
-		a.mutex.Lock()
-		select {
-		case <-ready:
-			// Acquired the semaphore after we were canceled.
-			// Pretend we didn't and put the tokens back.
-			a.acquired -= n
-			a.notifyWaiters()
-		default:
-			isFront := a.waiters.Front() == elem
-			a.waiters.Remove(elem)
-			// If we're at the front and there're extra tokens left, notify other waiters.
-			if isFront && a.limit > a.acquired {
-				a.notifyWaiters()
-			}
-		}
-		a.mutex.Unlock()
-		return ctx.Err()
-
-	case <-ready:
-		// Acquired the semaphore. Check that ctx isn't already done.
-		// We check the done channel instead of calling ctx.Err because we
-		// already have the channel, and ctx.Err is O(n) with the nesting
-		// depth of ctx.
-		select {
-		case <-done:
-			a.Release(n)
-			return ctx.Err()
-		default:
-		}
-		return nil
-	}
-}
-
-// TryAcquire acquires the semaphore with a weight of n without blocking.
-// On success, returns true. On failure, returns false and leaves the semaphore unchanged.
-func (a *Limiter) TryAcquire(n int) bool {
-	a.mutex.Lock()
-	success := a.limit-a.acquired >= n && a.waiters.Len() == 0
-	if success {
-		a.acquired += n
-	}
-	a.mutex.Unlock()
-	return success
-}
-
-// Release releases the semaphore with a weight of n.
-func (a *Limiter) Release(n int) {
-	a.mutex.Lock()
-	a.acquired -= n
-	if a.acquired < 0 {
-		a.mutex.Unlock()
-		panic("semaphore: released more than held")
-	}
-	a.notifyWaiters()
-	a.mutex.Unlock()
-}
-
-func (a *Limiter) notifyWaiters() {
-	for {
-		next := a.waiters.Front()
-		if next == nil {
-			break // No more waiters blocked.
-		}
-
-		w := next.Value.(waiter)
-		if a.limit-a.acquired < w.n {
-			// Not enough tokens for the next waiter.  We could keep going (to try to
-			// find a waiter with a smaller request), but under load that could cause
-			// starvation for large requests; instead, we leave all remaining waiters
-			// blocked.
-			//
-			// Consider a semaphore used as a read-write lock, with N tokens, N
-			// readers, and one writer.  Each reader can Acquire(1) to obtain a read
-			// lock.  The writer can Acquire(N) to obtain a write lock, excluding all
-			// of the readers.  If we allow the readers to jump ahead in the queue,
-			// the writer will starve — there is always one token available for every
-			// reader.
-			break
-		}
-
-		a.acquired += w.n
-		a.waiters.Remove(next)
-		close(w.ready)
-	}
+	a.mu.Unlock()
 }
